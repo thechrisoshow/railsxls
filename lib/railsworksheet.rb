@@ -16,53 +16,59 @@ JBRIDGE_OPTIONS = {
 
 include JavaBridge
 
-module Worksheet
-  class Handler < ActionView::TemplateHandler
-	    def compile(template)
-    		%Q{_set_controller_content_type(Mime::XLS)
-			   controller.headers["Content-Disposition"] ||= 'attachment; filename="' + (@worksheet_name || "\#{(params[:id] || params[:action])}.xls") + '"'
-			   
-         Worksheet::Base.new do |workbook|
-           #{template.source}
-         end.process
-         }
-    end    
-  end
-  
-  class Base
-    @@temp_file = nil
-    
-    def temp_file_path
-      if @@temp_file.nil?
-          temp = Tempfile.new('railsworksheet-', File.join(RAILS_ROOT, 'tmp') )
-          @@temp_file =  temp.path 
-          temp.close
+class WorksheetRender
+    	include ApplicationHelper
+      include ActionView::Helpers::NumberHelper
+
+      def self.compilable?
+           false
+         end
+
+      def compilable?
+        false
       end
-      @@temp_file
-    end
+
+    	def initialize(action_view)
+      		@action_view = action_view
+    	end
     
-    def initialize
-      jimport "java.io.*"
-      jimport "org.apache.poi.hssf.usermodel.*"
-      
-      CellBatch.instance.clear
-      RowGroupBatch.instance.clear
-      yield workbook
-      CellBatch.write_to(workbook.getSheetAt(0)) if CellBatch.instance.write_pending?
-      RowGroupBatch.group_rows(workbook.getSheetAt(0)) if RowGroupBatch.instance.group_pending?
+	    def render(template, local_assigns = {})
+	    	
+	    	
+	    	#get the instance variables setup	    	
+      	@action_view.controller.instance_variables.each do |v|
+        		instance_variable_set(v, @action_view.controller.instance_variable_get(v))
+		    end
+			  @rails_worksheet_name = "Default.xls" if @rails_worksheet_name.nil?
+				
+    		@action_view.controller.headers["Content-Type"] ||= 'application/xls'
+			  @action_view.controller.headers["Content-Disposition"] ||= 'attachment; filename="' + @rails_worksheet_name + '"'      
+        
+        jimport "java.io.*"
+        jimport "org.apache.poi.hssf.usermodel.*"
+        workbook = jnew :HSSFWorkbook
+
+        CellBatch.instance.clear
+        RowGroupBatch.instance.clear
+                
+        eval template.source, nil, "#{@action_view.base_path}/#{@action_view.first_render}.#{@action_view.finder.pick_template_extension(@action_view.first_render)}" 
+
+
+        # Save two lines each in the template where the user is building only
+        # worksheet. Will do no harm if the stuff is already written out.
+            
+        CellBatch.write_to(workbook.getSheetAt(0)) if CellBatch.instance.write_pending?
+        RowGroupBatch.group_rows(workbook.getSheetAt(0)) if RowGroupBatch.instance.group_pending?
+
+        begin
+          temp = Tempfile.new('railsworksheet-', File.join(RAILS_ROOT, 'tmp') )
+          out = jnew :FileOutputStream, temp.path
+          workbook.write(out)
+          out.close
+          File.open(temp.path, 'rb') { |file| file.read }
+        ensure
+          File.delete(temp.path)
+        end
     end
-    
-    def workbook
-		  @workbook ||= jnew :HSSFWorkbook
-    end
-    
-    def process
-      out = jnew :FileOutputStream, temp_file_path
-      workbook.write(out)
-      out.close
-      
-      File.open(temp_file_path, 'rb') { |file| file.read }         
-    end
-    
-  end
+        
 end
